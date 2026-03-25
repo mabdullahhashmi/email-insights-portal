@@ -17,4 +17,10 @@ return [
         'password_hash' => '',
         'webhook_secret' => 'replace_with_long_random_secret',
     ],
+    'mailer' => [
+        'from_email' => 'noreply@example.com',
+        'from_name' => 'Email Insights',
+        'reply_to' => 'support@example.com',
+        'default_timezone' => 'America/New_York',
+    ],
 ];

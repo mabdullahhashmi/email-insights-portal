@@ -9,6 +9,19 @@ $pdo = Database::pdo($config);
 $recipients = TrackingService::listRecipients($pdo, 500);
 $lists = TrackingService::listEmailLists($pdo);
 
+$timezoneOptions = [
+    'America/New_York',
+    'America/Chicago',
+    'America/Denver',
+    'America/Los_Angeles',
+    'America/Phoenix',
+    'UTC',
+];
+$defaultTimezone = (string) (($config['mailer']['default_timezone'] ?? 'America/New_York'));
+if (!in_array($defaultTimezone, $timezoneOptions, true)) {
+    $defaultTimezone = 'America/New_York';
+}
+
 $trackedHtml = '';
 $previewHtml = '';
 $error = '';
@@ -22,6 +35,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $newListName = trim((string) ($_POST['new_list_name'] ?? ''));
     $subject = trim((string) ($_POST['subject'] ?? ''));
     $html = (string) ($_POST['html_content'] ?? '');
+    $sendMode = (string) ($_POST['send_mode'] ?? 'generate');
+    $scheduleLocal = trim((string) ($_POST['schedule_local'] ?? ''));
+    $scheduleTimezone = trim((string) ($_POST['schedule_timezone'] ?? $defaultTimezone));
+
+    if (!in_array($sendMode, ['generate', 'send_now', 'schedule'], true)) {
+        $sendMode = 'generate';
+    }
+
+    if (!in_array($scheduleTimezone, $timezoneOptions, true)) {
+        $scheduleTimezone = $defaultTimezone;
+    }
 
     if (trim($html) === '') {
         $error = 'HTML content is required.';
@@ -59,16 +83,39 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $recipientToken = (string) $recipient['tracking_token'];
             $baseUrl = (string) ($config['base_url'] ?? '');
 
+            $sendStatus = 'generated';
+            $scheduledUtc = null;
+
+            if ($sendMode === 'schedule') {
+                $scheduledUtc = TrackingService::toUtcSchedule($scheduleLocal, $scheduleTimezone);
+                if ($scheduledUtc === null) {
+                    $error = 'Schedule date/time or timezone is invalid.';
+                } else {
+                    $sendStatus = 'scheduled';
+                }
+            } elseif ($sendMode === 'send_now') {
+                $sendStatus = 'queued';
+            }
+
+            if ($error !== '') {
+                $previewHtml = HtmlTracker::previewHtml($html, $recipientToken, $baseUrl, null);
+                goto render_page;
+            }
+
             $sentMessageId = TrackingService::createSentMessage(
                 $pdo,
                 $recipientId,
                 $selectedListId,
                 $subject,
                 $html,
-                ''
+                '',
+                $sendStatus,
+                $scheduledUtc,
+                $scheduleTimezone
             );
 
             $trackedHtml = HtmlTracker::trackedHtml($html, $recipientToken, $baseUrl, $sentMessageId);
+            $previewHtml = HtmlTracker::previewHtml($html, $recipientToken, $baseUrl, $sentMessageId);
             TrackingService::updateSentMessageTrackedHtml($pdo, $sentMessageId, $trackedHtml);
             TrackingService::logEvent(
                 $pdo,
@@ -81,14 +128,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sentMessageId
             );
 
-            $previewHtml = $trackedHtml;
-            $success = 'Tracked email generated and saved to history. Message ID: ' . $sentMessageId;
+            if ($sendMode === 'send_now') {
+                $sendResult = Mailer::sendHtml(
+                    $config,
+                    (string) ($recipient['email'] ?? ''),
+                    (string) ($recipient['full_name'] ?? ''),
+                    $subject,
+                    $trackedHtml
+                );
+
+                if (!empty($sendResult['ok'])) {
+                    TrackingService::markMessageSent($pdo, $sentMessageId);
+                    TrackingService::logEvent($pdo, $recipientId, 'sent', ['source' => 'portal_send_now'], $sentMessageId);
+                    $success = 'Email sent immediately and tracked. Message ID: ' . $sentMessageId;
+                } else {
+                    $sendError = (string) ($sendResult['error'] ?? 'Unknown send error');
+                    TrackingService::markMessageFailed($pdo, $sentMessageId, $sendError);
+                    TrackingService::logEvent($pdo, $recipientId, 'send_failed', ['error' => $sendError], $sentMessageId);
+                    $error = 'Send failed: ' . $sendError;
+                }
+            } elseif ($sendMode === 'schedule') {
+                $success = 'Email scheduled successfully. Message ID: ' . $sentMessageId . ' (scheduled in ' . $scheduleTimezone . ')';
+            } else {
+                $success = 'Tracked email generated and saved to history. Message ID: ' . $sentMessageId;
+            }
 
             $lists = TrackingService::listEmailLists($pdo);
             $recipients = TrackingService::listRecipients($pdo, 500);
         }
     }
 }
+
+render_page:
 ?>
 <!doctype html>
 <html lang="en">
@@ -107,11 +178,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             --line: #dbe3ee;
             --danger: #b91c1c;
             --ok: #166534;
+            --ink-2: #102f44;
         }
         * { box-sizing: border-box; }
         body {
             margin: 0;
-            font-family: "Segoe UI", Tahoma, sans-serif;
+            font-family: "Trebuchet MS", "Lucida Sans", sans-serif;
             color: var(--text);
             background:
                 radial-gradient(circle at 10% 10%, #d1fae5 0%, transparent 40%),
@@ -165,9 +237,63 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .section-title { margin: 0 0 8px; }
         .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         .small { font-size: 12px; color: var(--muted); }
+        .mode-wrap { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 8px; }
+        .mode-wrap label {
+            border: 1px solid #c8d5e5;
+            border-radius: 10px;
+            padding: 10px;
+            cursor: pointer;
+            margin-top: 0;
+            font-weight: 700;
+            background: #f9fbff;
+        }
+        .mode-wrap input { width: auto; margin-right: 6px; }
+        .editor-toggle { display: flex; gap: 8px; margin-top: 10px; }
+        .toggle-btn {
+            border: 1px solid #bfd2e8;
+            background: #f2f8ff;
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--ink-2);
+            cursor: pointer;
+        }
+        .toggle-btn.active {
+            background: #0f766e;
+            color: #fff;
+            border-color: #0f766e;
+        }
+        .composer-toolbar {
+            display: flex;
+            gap: 6px;
+            flex-wrap: wrap;
+            margin-top: 10px;
+        }
+        .composer-toolbar button {
+            margin-top: 0;
+            padding: 7px 10px;
+            border-radius: 8px;
+            background: #e7f0fb;
+            color: #0b3551;
+            font-weight: 700;
+            border: 1px solid #b7cbe2;
+        }
+        .composer-toolbar button:hover { background: #d8e9fa; }
+        .wysiwyg {
+            margin-top: 8px;
+            border: 1px solid #c8d5e5;
+            border-radius: 10px;
+            min-height: 260px;
+            padding: 12px;
+            background: #fff;
+            overflow: auto;
+        }
+        .hidden { display: none !important; }
         @media (max-width: 1000px) {
             .grid { grid-template-columns: 1fr; }
             .two-col { grid-template-columns: 1fr; }
+            .mode-wrap { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -186,7 +312,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     <div class="grid">
         <div class="card">
-            <h3 class="section-title">1) Recipient + List + HTML</h3>
+            <h3 class="section-title">1) Recipient + List + Compose</h3>
             <form method="post">
                 <div class="two-col">
                     <div>
@@ -228,13 +354,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </div>
 
+                <label>Send Mode</label>
+                <div class="mode-wrap">
+                    <label><input type="radio" name="send_mode" value="generate" <?php echo ((string) ($_POST['send_mode'] ?? 'generate') === 'generate') ? 'checked' : ''; ?> /> Generate only</label>
+                    <label><input type="radio" name="send_mode" value="send_now" <?php echo ((string) ($_POST['send_mode'] ?? '') === 'send_now') ? 'checked' : ''; ?> /> Send now</label>
+                    <label><input type="radio" name="send_mode" value="schedule" <?php echo ((string) ($_POST['send_mode'] ?? '') === 'schedule') ? 'checked' : ''; ?> /> Schedule send</label>
+                </div>
+
+                <div class="two-col" id="schedule-fields">
+                    <div>
+                        <label>Schedule Date/Time</label>
+                        <input type="datetime-local" name="schedule_local" value="<?php echo htmlspecialchars((string) ($_POST['schedule_local'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" />
+                    </div>
+                    <div>
+                        <label>Timezone</label>
+                        <select name="schedule_timezone">
+                            <?php foreach ($timezoneOptions as $tz): ?>
+                                <option value="<?php echo htmlspecialchars($tz, ENT_QUOTES, 'UTF-8'); ?>" <?php echo ((string) ($_POST['schedule_timezone'] ?? $defaultTimezone) === $tz) ? 'selected' : ''; ?>><?php echo htmlspecialchars($tz, ENT_QUOTES, 'UTF-8'); ?></option>
+                            <?php endforeach; ?>
+                        </select>
+                    </div>
+                </div>
+
                 <label>Email Subject (saved in history)</label>
                 <input type="text" name="subject" value="<?php echo htmlspecialchars((string) ($_POST['subject'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional but recommended" />
 
-                <label>Original HTML Email</label>
-                <textarea name="html_content" placeholder="Paste full HTML email..." required><?php echo htmlspecialchars((string) ($_POST['html_content'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                <label>Email Composer</label>
+                <div class="editor-toggle">
+                    <button class="toggle-btn active" type="button" data-editor-mode="wysiwyg">WYSIWYG</button>
+                    <button class="toggle-btn" type="button" data-editor-mode="source">HTML Source</button>
+                </div>
 
-                <button type="submit">Generate + Save Tracked Email</button>
+                <div class="composer-toolbar" id="composer-toolbar">
+                    <button type="button" data-cmd="bold">Bold</button>
+                    <button type="button" data-cmd="italic">Italic</button>
+                    <button type="button" data-cmd="underline">Underline</button>
+                    <button type="button" data-cmd="insertUnorderedList">Bullets</button>
+                    <button type="button" data-cmd="createLink">Add Link</button>
+                    <button type="button" data-cmd="insertImage">Add Image</button>
+                </div>
+
+                <div id="wysiwyg-editor" class="wysiwyg" contenteditable="true"></div>
+                <textarea id="html-source" name="html_content" placeholder="Paste full HTML email..." required><?php echo htmlspecialchars((string) ($_POST['html_content'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                <p class="small">Any links, including image links, will be auto-rewritten to click tracking URLs.</p>
+
+                <button type="submit">Process Email</button>
             </form>
         </div>
 
@@ -243,7 +407,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <?php if ($previewHtml !== ''): ?>
                 <iframe class="preview" srcdoc="<?php echo htmlspecialchars($previewHtml, ENT_QUOTES, 'UTF-8'); ?>"></iframe>
             <?php else: ?>
-                <p class="small">Generate tracked HTML to preview it here before sending.</p>
+                <p class="small">Preview uses safe mode (no pixel) so internal preview will not create fake open events.</p>
                 <div class="preview"></div>
             <?php endif; ?>
         </div>
@@ -252,10 +416,105 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <?php if ($trackedHtml !== ''): ?>
         <div class="card" style="margin-top: 14px;">
             <h3 class="section-title">3) Tracked HTML Output</h3>
-            <p class="small">Copy this and paste it into Hostinger webmail HTML/source mode.</p>
+            <p class="small">Copy this for external email tools, or use Send Now / Schedule in this portal.</p>
             <textarea readonly><?php echo htmlspecialchars($trackedHtml, ENT_QUOTES, 'UTF-8'); ?></textarea>
         </div>
     <?php endif; ?>
 </div>
+<script>
+    (function () {
+        const source = document.getElementById('html-source');
+        const wysiwyg = document.getElementById('wysiwyg-editor');
+        const toolbar = document.getElementById('composer-toolbar');
+        const toggleButtons = Array.from(document.querySelectorAll('[data-editor-mode]'));
+        const sendModeInputs = Array.from(document.querySelectorAll('input[name="send_mode"]'));
+        const scheduleFields = document.getElementById('schedule-fields');
+
+        function setMode(mode) {
+            const wysiwygMode = mode === 'wysiwyg';
+            toggleButtons.forEach((btn) => {
+                btn.classList.toggle('active', btn.getAttribute('data-editor-mode') === mode);
+            });
+
+            if (wysiwygMode) {
+                source.classList.add('hidden');
+                toolbar.classList.remove('hidden');
+                wysiwyg.classList.remove('hidden');
+                if (wysiwyg.innerHTML.trim() === '') {
+                    wysiwyg.innerHTML = source.value;
+                }
+            } else {
+                syncFromWysiwyg();
+                source.classList.remove('hidden');
+                toolbar.classList.add('hidden');
+                wysiwyg.classList.add('hidden');
+            }
+        }
+
+        function syncFromWysiwyg() {
+            source.value = wysiwyg.innerHTML;
+        }
+
+        function syncToWysiwyg() {
+            if (wysiwyg.innerHTML.trim() === '') {
+                wysiwyg.innerHTML = source.value;
+            }
+        }
+
+        toggleButtons.forEach((btn) => {
+            btn.addEventListener('click', function () {
+                setMode(this.getAttribute('data-editor-mode'));
+            });
+        });
+
+        toolbar.addEventListener('click', function (event) {
+            const target = event.target;
+            if (!(target instanceof HTMLButtonElement)) {
+                return;
+            }
+
+            const cmd = target.getAttribute('data-cmd');
+            if (!cmd) {
+                return;
+            }
+
+            if (cmd === 'createLink') {
+                const url = window.prompt('Enter URL');
+                if (url) {
+                    document.execCommand('createLink', false, url);
+                }
+            } else if (cmd === 'insertImage') {
+                const imageUrl = window.prompt('Enter Image URL');
+                if (imageUrl) {
+                    document.execCommand('insertImage', false, imageUrl);
+                }
+            } else {
+                document.execCommand(cmd, false, null);
+            }
+
+            syncFromWysiwyg();
+        });
+
+        wysiwyg.addEventListener('input', syncFromWysiwyg);
+        source.addEventListener('input', syncToWysiwyg);
+
+        function updateScheduleVisibility() {
+            const selected = sendModeInputs.find((i) => i.checked);
+            const isSchedule = selected && selected.value === 'schedule';
+            scheduleFields.classList.toggle('hidden', !isSchedule);
+        }
+
+        sendModeInputs.forEach((input) => input.addEventListener('change', updateScheduleVisibility));
+
+        syncToWysiwyg();
+        setMode('wysiwyg');
+        updateScheduleVisibility();
+
+        const form = document.querySelector('form');
+        if (form) {
+            form.addEventListener('submit', syncFromWysiwyg);
+        }
+    })();
+</script>
 </body>
 </html>

@@ -34,6 +34,12 @@ final class HtmlTracker
         }, $html) ?? $html;
     }
 
+    public static function previewHtml(string $html, string $token, string $baseUrl, ?int $sentMessageId = null): string
+    {
+        // Preview keeps click tracking links but intentionally omits the open pixel.
+        return self::rewriteLinks($html, $token, $baseUrl, $sentMessageId);
+    }
+
     public static function pixelTag(string $token, string $baseUrl, ?int $sentMessageId = null): string
     {
         $url = rtrim($baseUrl, '/') . '/track/open.php?t=' . rawurlencode($token);

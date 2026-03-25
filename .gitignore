@@ -1,6 +1,5 @@
 # Local environment secrets
 config/config.php
-hash.php
 
 # Logs and temp
 *.log

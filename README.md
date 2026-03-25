@@ -15,6 +15,9 @@ Standalone recipient-level tracking portal for emails sent manually from webmail
 - Recipient detail page with past emails and event timeline
 - Built-in HTML preview before sending
 - Login-protected dashboard
+- List-scoped analytics pages
+- Send now and schedule email from portal
+- Manual and cron queue runner
 
 ## Folder structure
 
@@ -34,6 +37,10 @@ Standalone recipient-level tracking portal for emails sent manually from webmail
    - `portal.username`
    - `portal.password_hash`
    - `portal.webhook_secret`
+  - `mailer.from_email`
+  - `mailer.from_name`
+  - `mailer.reply_to`
+  - `mailer.default_timezone`
 5. Open `login.php` in browser and sign in.
 
 ## Migration for existing installs
@@ -68,6 +75,23 @@ CREATE TABLE IF NOT EXISTS sent_messages (
 ALTER TABLE events ADD COLUMN sent_message_id BIGINT UNSIGNED DEFAULT NULL;
 ALTER TABLE events ADD KEY idx_sent_message_id (sent_message_id);
 ALTER TABLE events ADD CONSTRAINT fk_events_sent_message FOREIGN KEY (sent_message_id) REFERENCES sent_messages(id) ON DELETE SET NULL;
+
+ALTER TABLE sent_messages ADD COLUMN recipient_email_snapshot VARCHAR(190) NOT NULL DEFAULT '' AFTER list_id;
+ALTER TABLE sent_messages ADD COLUMN recipient_name_snapshot VARCHAR(190) DEFAULT '' AFTER recipient_email_snapshot;
+ALTER TABLE sent_messages ADD COLUMN send_status VARCHAR(30) NOT NULL DEFAULT 'generated' AFTER tracked_html;
+ALTER TABLE sent_messages ADD COLUMN scheduled_at_utc DATETIME DEFAULT NULL AFTER send_status;
+ALTER TABLE sent_messages ADD COLUMN scheduled_timezone VARCHAR(64) NOT NULL DEFAULT 'UTC' AFTER scheduled_at_utc;
+ALTER TABLE sent_messages ADD COLUMN sent_at DATETIME DEFAULT NULL AFTER scheduled_timezone;
+ALTER TABLE sent_messages ADD COLUMN send_attempts INT UNSIGNED NOT NULL DEFAULT 0 AFTER sent_at;
+ALTER TABLE sent_messages ADD COLUMN last_error VARCHAR(500) DEFAULT '' AFTER send_attempts;
+ALTER TABLE sent_messages ADD COLUMN updated_at DATETIME DEFAULT NULL AFTER created_at;
+ALTER TABLE sent_messages ADD KEY idx_send_status_scheduled (send_status, scheduled_at_utc);
+
+UPDATE sent_messages sm
+INNER JOIN recipients r ON r.id = sm.recipient_id
+SET sm.recipient_email_snapshot = r.email,
+    sm.recipient_name_snapshot = r.full_name
+WHERE sm.recipient_email_snapshot = '';
 ```
 
 ## Password hash command
@@ -90,6 +114,21 @@ Paste output in `portal.password_hash`.
 6. Paste into Hostinger webmail compose source and send.
 7. Open `dashboard.php` for summary and click recipient email for full history/timeline.
 
+## Sending from portal
+
+`generate.php` now supports:
+
+1. Generate only (no send)
+2. Send now using `mail()`
+3. Schedule by local datetime + timezone
+
+Scheduled sends can be processed two ways:
+
+1. Manual: open `send-queue.php` and click **Run Due Sends Now**
+2. Cron: call `cron-send.php?s=YOUR_WEBHOOK_SECRET` every minute
+
+Note: inbox placement (Primary tab) depends on sender reputation/content and cannot be guaranteed by code alone.
+
 ## Endpoints
 
 - Open pixel: `/track/open.php?t={token}&mid={message_id}`
@@ -111,3 +150,4 @@ Bounce webhook JSON example:
 - Opens are estimates (image blocking/proxy/privacy can affect data).
 - Clicks are more reliable than opens.
 - Delivered estimate is calculated as sent minus bounced.
+- Portal previews no longer include open pixel to prevent false open inflation.

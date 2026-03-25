@@ -7,7 +7,9 @@ Auth::requireLogin();
 
 $pdo = Database::pdo($config);
 $recipientId = (int) ($_GET['id'] ?? 0);
+$listId = (int) ($_GET['list_id'] ?? 0);
 $recipient = $recipientId > 0 ? TrackingService::findRecipientById($pdo, $recipientId) : null;
+$activeList = $listId > 0 ? TrackingService::getEmailListById($pdo, $listId) : null;
 
 if (!$recipient) {
     http_response_code(404);
@@ -15,8 +17,10 @@ if (!$recipient) {
     exit;
 }
 
-$messages = TrackingService::listSentMessagesByRecipient($pdo, (int) $recipient['id'], 100);
-$events = TrackingService::listEventsByRecipient($pdo, (int) $recipient['id'], 200);
+$filterListId = $activeList ? (int) $activeList['id'] : null;
+$messages = TrackingService::listSentMessagesByRecipient($pdo, (int) $recipient['id'], 100, $filterListId);
+$events = TrackingService::listEventsByRecipient($pdo, (int) $recipient['id'], 200, $filterListId);
+$listScopedStats = $activeList ? TrackingService::getRecipientListStats($pdo, (int) $recipient['id'], (int) $activeList['id']) : null;
 ?>
 <!doctype html>
 <html lang="en">
@@ -52,14 +56,20 @@ $events = TrackingService::listEventsByRecipient($pdo, (int) $recipient['id'], 2
 <body>
 <div class="container">
     <p><a class="back" href="<?php echo htmlspecialchars(portal_url($config, '/dashboard.php'), ENT_QUOTES, 'UTF-8'); ?>">Back to Dashboard</a></p>
+    <?php if ($activeList): ?>
+        <p style="margin-top: -6px;"><a class="back" href="<?php echo htmlspecialchars(portal_url($config, '/list.php?id=' . (int) $activeList['id']), ENT_QUOTES, 'UTF-8'); ?>">Back to List: <?php echo htmlspecialchars((string) $activeList['name'], ENT_QUOTES, 'UTF-8'); ?></a></p>
+    <?php endif; ?>
 
     <div class="card">
         <h2 style="margin:0;">Recipient: <?php echo htmlspecialchars((string) $recipient['email'], ENT_QUOTES, 'UTF-8'); ?></h2>
+        <?php if ($activeList): ?>
+            <p style="margin:6px 0 0; color: var(--muted);">Scope: list <strong><?php echo htmlspecialchars((string) $activeList['name'], ENT_QUOTES, 'UTF-8'); ?></strong></p>
+        <?php endif; ?>
         <p style="margin:6px 0 0; color: var(--muted);">Token: <?php echo htmlspecialchars((string) $recipient['tracking_token'], ENT_QUOTES, 'UTF-8'); ?></p>
         <div class="stats">
             <div class="stat"><div class="label">Status</div><div class="value"><?php echo htmlspecialchars((string) $recipient['status'], ENT_QUOTES, 'UTF-8'); ?></div></div>
-            <div class="stat"><div class="label">Open Count</div><div class="value"><?php echo (int) $recipient['open_count']; ?></div></div>
-            <div class="stat"><div class="label">Click Count</div><div class="value"><?php echo (int) $recipient['click_count']; ?></div></div>
+            <div class="stat"><div class="label"><?php echo $activeList ? 'Opened Messages (List)' : 'Open Count'; ?></div><div class="value"><?php echo (int) ($activeList ? $listScopedStats['opened_messages'] : $recipient['open_count']); ?></div></div>
+            <div class="stat"><div class="label"><?php echo $activeList ? 'Clicked Messages (List)' : 'Click Count'; ?></div><div class="value"><?php echo (int) ($activeList ? $listScopedStats['clicked_messages'] : $recipient['click_count']); ?></div></div>
             <div class="stat"><div class="label">Last Click</div><div class="value" style="font-size:14px;"><?php echo htmlspecialchars((string) ($recipient['last_clicked_at'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></div></div>
         </div>
     </div>
@@ -87,8 +97,8 @@ $events = TrackingService::listEventsByRecipient($pdo, (int) $recipient['id'], 2
                         <td><?php echo htmlspecialchars((string) ($m['subject'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
                         <td><?php echo htmlspecialchars((string) $m['created_at'], ENT_QUOTES, 'UTF-8'); ?></td>
                         <td>
-                            <?php if (trim((string) ($m['tracked_html'] ?? '')) !== ''): ?>
-                                <iframe class="preview" srcdoc="<?php echo htmlspecialchars((string) $m['tracked_html'], ENT_QUOTES, 'UTF-8'); ?>"></iframe>
+                            <?php if (trim((string) ($m['original_html'] ?? '')) !== ''): ?>
+                                <iframe class="preview" srcdoc="<?php echo htmlspecialchars((string) $m['original_html'], ENT_QUOTES, 'UTF-8'); ?>"></iframe>
                             <?php else: ?>
                                 <span style="color: var(--muted);">No HTML</span>
                             <?php endif; ?>

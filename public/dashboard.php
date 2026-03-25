@@ -8,7 +8,7 @@ Auth::requireLogin();
 $pdo = Database::pdo($config);
 $stats = TrackingService::getDashboardStats($pdo);
 $rows = TrackingService::listRecipients($pdo, 300);
-$lists = TrackingService::listEmailLists($pdo);
+$lists = TrackingService::listEmailListsWithStats($pdo);
 
 $listCountStmt = $pdo->query('SELECT COUNT(*) AS c FROM sent_messages');
 $totalMessages = (int) (($listCountStmt->fetch()['c'] ?? 0));
@@ -113,7 +113,9 @@ $totalMessages = (int) (($listCountStmt->fetch()['c'] ?? 0));
         </div>
         <div class="links">
             <a href="<?php echo htmlspecialchars(portal_url($config, '/recipients.php'), ENT_QUOTES, 'UTF-8'); ?>">Recipients</a>
+            <a href="<?php echo htmlspecialchars(portal_url($config, '/lists.php'), ENT_QUOTES, 'UTF-8'); ?>">Lists</a>
             <a href="<?php echo htmlspecialchars(portal_url($config, '/generate.php'), ENT_QUOTES, 'UTF-8'); ?>">Generate Email</a>
+            <a href="<?php echo htmlspecialchars(portal_url($config, '/send-queue.php'), ENT_QUOTES, 'UTF-8'); ?>">Run Queue</a>
             <a href="<?php echo htmlspecialchars(portal_url($config, '/logout.php'), ENT_QUOTES, 'UTF-8'); ?>">Logout</a>
         </div>
     </div>
@@ -173,7 +175,10 @@ $totalMessages = (int) (($listCountStmt->fetch()['c'] ?? 0));
                 <p style="color: var(--muted);">No lists yet. Create one in Generate Email.</p>
             <?php else: ?>
                 <?php foreach ($lists as $list): ?>
-                    <span class="list-chip"><?php echo htmlspecialchars((string) $list['name'], ENT_QUOTES, 'UTF-8'); ?></span>
+                    <a class="list-chip" href="<?php echo htmlspecialchars(portal_url($config, '/list.php?id=' . (int) $list['id']), ENT_QUOTES, 'UTF-8'); ?>" style="text-decoration:none;">
+                        <?php echo htmlspecialchars((string) $list['name'], ENT_QUOTES, 'UTF-8'); ?>
+                        (<?php echo (int) $list['unique_opened']; ?>/<?php echo (int) $list['total_recipients']; ?> opened)
+                    </a>
                 <?php endforeach; ?>
             <?php endif; ?>
             <hr style="border:0;border-top:1px solid var(--line); margin:14px 0;" />
