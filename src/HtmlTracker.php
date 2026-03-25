@@ -42,8 +42,12 @@ final class HtmlTracker
                 return $matches[0];
             }
 
-            $encodedUrl = rtrim(strtr(base64_encode($source), '+/', '-_'), '=');
-            $tracked = rtrim($baseUrl, '/') . '/track/image.php?t=' . rawurlencode($token) . '&u=' . rawurlencode($encodedUrl);
+            $uploadPath = self::extractUploadPath($source);
+            if ($uploadPath === '') {
+                return $matches[0];
+            }
+
+            $tracked = rtrim($baseUrl, '/') . '/track/image.php?t=' . rawurlencode($token) . '&f=' . rawurlencode($uploadPath);
             if ($sentMessageId !== null) {
                 $tracked .= '&mid=' . rawurlencode((string) $sentMessageId);
             }
@@ -77,6 +81,28 @@ final class HtmlTracker
         }
 
         return strpos($source, 'uploads/') === 0;
+    }
+
+    private static function extractUploadPath(string $source): string
+    {
+        $path = (string) (parse_url($source, PHP_URL_PATH) ?? '');
+        if ($path === '') {
+            $path = $source;
+        }
+
+        $pos = strpos($path, '/uploads/');
+        if ($pos !== false) {
+            $path = substr($path, $pos + 9);
+        } elseif (strpos($path, 'uploads/') === 0) {
+            $path = substr($path, 8);
+        }
+
+        $path = ltrim(str_replace('\\', '/', $path), '/');
+        if ($path === '' || strpos($path, '..') !== false) {
+            return '';
+        }
+
+        return $path;
     }
 
     public static function decodeUrl(string $safeBase64): string

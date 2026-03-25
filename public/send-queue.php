@@ -11,7 +11,14 @@ $error = '';
 $result = ['processed' => 0, 'sent' => 0, 'failed' => 0];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $dueMessages = TrackingService::listDueScheduledMessages($pdo, 200);
+    $dueMessages = $pdo->query(
+        "SELECT sm.*, r.email AS recipient_email, r.full_name AS recipient_name, r.tracking_token
+         FROM sent_messages sm
+         INNER JOIN recipients r ON r.id = sm.recipient_id
+         WHERE sm.send_status = 'scheduled'
+         ORDER BY sm.scheduled_at_utc ASC, sm.id ASC
+         LIMIT 200"
+    )->fetchAll() ?: [];
 
     foreach ($dueMessages as $msg) {
         $result['processed']++;
@@ -36,7 +43,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($result['processed'] === 0) {
-        $message = 'No due scheduled emails right now.';
+        $message = 'No scheduled emails in queue right now.';
     } else {
         $message = 'Queue run completed. Processed: ' . $result['processed'] . ', sent: ' . $result['sent'] . ', failed: ' . $result['failed'];
     }
@@ -47,10 +54,23 @@ $pending = $pdo->query(
 )->fetch();
 $pendingCount = (int) ($pending['c'] ?? 0);
 
+$dueNow = $pdo->query(
+    "SELECT COUNT(*) AS c FROM sent_messages WHERE send_status = 'scheduled' AND scheduled_at_utc IS NOT NULL AND scheduled_at_utc <= UTC_TIMESTAMP()"
+)->fetch();
+$dueNowCount = (int) ($dueNow['c'] ?? 0);
+
 $failed = $pdo->query(
     "SELECT COUNT(*) AS c FROM sent_messages WHERE send_status = 'failed'"
 )->fetch();
 $failedCount = (int) ($failed['c'] ?? 0);
+
+$failedItems = $pdo->query(
+    "SELECT id, recipient_email_snapshot, subject, last_error, send_attempts, updated_at
+     FROM sent_messages
+     WHERE send_status = 'failed'
+     ORDER BY updated_at DESC, id DESC
+     LIMIT 10"
+)->fetchAll() ?: [];
 ?>
 <!doctype html>
 <html lang="en">
@@ -79,6 +99,9 @@ $failedCount = (int) ($failed['c'] ?? 0);
         button { border: 0; background: var(--brand); color: #fff; padding: 10px 14px; border-radius: 10px; font-weight: 700; cursor: pointer; }
         .ok { color: var(--ok); }
         .error { color: var(--danger); }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+        th, td { border: 1px solid var(--line); padding: 8px; text-align: left; vertical-align: top; font-size: 13px; }
+        th { background: #f8fafc; }
     </style>
 </head>
 <body>
@@ -88,12 +111,14 @@ $failedCount = (int) ($failed['c'] ?? 0);
     <div class="card">
         <h2 style="margin-top: 0;">Scheduled Send Queue</h2>
         <p style="color: var(--muted); margin-top: -4px;">Use this page manually, or call cron endpoint every minute to send due emails automatically.</p>
+        <p style="color: var(--muted); margin-top: -8px; font-size: 13px;">Manual run sends all currently scheduled emails immediately. Cron sends only those due by UTC time.</p>
 
         <?php if ($message !== ''): ?><p class="ok"><?php echo htmlspecialchars($message, ENT_QUOTES, 'UTF-8'); ?></p><?php endif; ?>
         <?php if ($error !== ''): ?><p class="error"><?php echo htmlspecialchars($error, ENT_QUOTES, 'UTF-8'); ?></p><?php endif; ?>
 
         <div class="stat-row">
             <div class="stat"><div class="label">Pending Scheduled</div><div class="value"><?php echo $pendingCount; ?></div></div>
+            <div class="stat"><div class="label">Due To Send Now (UTC)</div><div class="value"><?php echo $dueNowCount; ?></div></div>
             <div class="stat"><div class="label">Failed Sends</div><div class="value"><?php echo $failedCount; ?></div></div>
         </div>
 
@@ -104,6 +129,34 @@ $failedCount = (int) ($failed['c'] ?? 0);
         <p style="margin: 14px 0 0; color: var(--muted); font-size: 13px;">
             Cron URL format: <code>/cron-send.php?s=YOUR_WEBHOOK_SECRET</code>
         </p>
+
+        <?php if (!empty($failedItems)): ?>
+            <h3 style="margin: 18px 0 8px;">Recent Failed Sends</h3>
+            <table>
+                <thead>
+                <tr>
+                    <th>ID</th>
+                    <th>Recipient</th>
+                    <th>Subject</th>
+                    <th>Attempts</th>
+                    <th>Last Error</th>
+                    <th>Updated (server time)</th>
+                </tr>
+                </thead>
+                <tbody>
+                <?php foreach ($failedItems as $row): ?>
+                    <tr>
+                        <td><?php echo (int) ($row['id'] ?? 0); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($row['recipient_email_snapshot'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($row['subject'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo (int) ($row['send_attempts'] ?? 0); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($row['last_error'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                        <td><?php echo htmlspecialchars((string) ($row['updated_at'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                    </tr>
+                <?php endforeach; ?>
+                </tbody>
+            </table>
+        <?php endif; ?>
     </div>
 </div>
 </body>
