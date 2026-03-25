@@ -21,6 +21,6 @@ return [
         'from_email' => 'noreply@example.com',
         'from_name' => 'Email Insights',
         'reply_to' => 'support@example.com',
-        'default_timezone' => 'America/New_York',
+        'default_timezone' => 'UTC',
     ],
 ];

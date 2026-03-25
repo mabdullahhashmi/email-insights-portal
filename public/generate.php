@@ -9,18 +9,8 @@ $pdo = Database::pdo($config);
 $recipients = TrackingService::listRecipients($pdo, 500);
 $lists = TrackingService::listEmailLists($pdo);
 
-$timezoneOptions = [
-    'America/New_York',
-    'America/Chicago',
-    'America/Denver',
-    'America/Los_Angeles',
-    'America/Phoenix',
-    'UTC',
-];
-$defaultTimezone = (string) (($config['mailer']['default_timezone'] ?? 'America/New_York'));
-if (!in_array($defaultTimezone, $timezoneOptions, true)) {
-    $defaultTimezone = 'America/New_York';
-}
+$timezoneOptions = ['UTC'];
+$defaultTimezone = 'UTC';
 
 $trackedHtml = '';
 $previewHtml = '';
