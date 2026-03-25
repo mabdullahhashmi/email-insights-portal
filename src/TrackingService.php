@@ -281,7 +281,7 @@ final class TrackingService
         $stmt->execute();
     }
 
-    public static function trackOpen(PDO $pdo, array $recipient, ?int $sentMessageId = null): void
+    public static function trackOpen(PDO $pdo, array $recipient, ?int $sentMessageId = null, string $source = 'pixel'): void
     {
         $recipientId = (int) $recipient['id'];
         $ip = self::clientIp();
@@ -324,7 +324,7 @@ final class TrackingService
         }
 
         self::logEvent($pdo, $recipientId, $eventType, [
-            'source' => 'pixel',
+            'source' => $source,
             'human_likely' => $humanLikely,
             'proxy_likely' => $proxyLikely,
             'duplicate_filtered' => $duplicateLikely,

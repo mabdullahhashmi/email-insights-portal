@@ -7,13 +7,7 @@ final class HtmlTracker
     public static function trackedHtml(string $html, string $token, string $baseUrl, ?int $sentMessageId = null): string
     {
         $html = self::rewriteLinks($html, $token, $baseUrl, $sentMessageId);
-        $pixel = self::pixelTag($token, $baseUrl, $sentMessageId);
-
-        if (stripos($html, '</body>') !== false) {
-            return preg_replace('/<\/body>/i', $pixel . '</body>', $html, 1) ?? ($html . $pixel);
-        }
-
-        return $html . $pixel;
+        return self::rewriteUploadedImages($html, $token, $baseUrl, $sentMessageId);
     }
 
     public static function rewriteLinks(string $html, string $token, string $baseUrl, ?int $sentMessageId = null): string
@@ -36,17 +30,53 @@ final class HtmlTracker
 
     public static function previewHtml(string $html, string $token, string $baseUrl, ?int $sentMessageId = null): string
     {
-        // Preview keeps click tracking links but intentionally omits the open pixel.
+        // Preview keeps click tracking links and intentionally avoids image/open tracking.
         return self::rewriteLinks($html, $token, $baseUrl, $sentMessageId);
     }
 
-    public static function pixelTag(string $token, string $baseUrl, ?int $sentMessageId = null): string
+    public static function rewriteUploadedImages(string $html, string $token, string $baseUrl, ?int $sentMessageId = null): string
     {
-        $url = rtrim($baseUrl, '/') . '/track/open.php?t=' . rawurlencode($token);
-        if ($sentMessageId !== null) {
-            $url .= '&mid=' . rawurlencode((string) $sentMessageId);
+        return preg_replace_callback('/src\s*=\s*["\']([^"\']+)["\']/i', function (array $matches) use ($token, $baseUrl, $sentMessageId) {
+            $source = trim($matches[1]);
+            if (!self::isTrackableUploadedImage($source, $baseUrl)) {
+                return $matches[0];
+            }
+
+            $encodedUrl = rtrim(strtr(base64_encode($source), '+/', '-_'), '=');
+            $tracked = rtrim($baseUrl, '/') . '/track/image.php?t=' . rawurlencode($token) . '&u=' . rawurlencode($encodedUrl);
+            if ($sentMessageId !== null) {
+                $tracked .= '&mid=' . rawurlencode((string) $sentMessageId);
+            }
+
+            return 'src="' . htmlspecialchars($tracked, ENT_QUOTES, 'UTF-8') . '"';
+        }, $html) ?? $html;
+    }
+
+    private static function isTrackableUploadedImage(string $source, string $baseUrl): bool
+    {
+        if ($source === '' || stripos($source, 'data:') === 0) {
+            return false;
         }
-        return '<img src="' . htmlspecialchars($url, ENT_QUOTES, 'UTF-8') . '" alt="" width="1" height="1" style="display:none;" />';
+
+        // Support absolute URL form created by the upload endpoint.
+        $base = parse_url($baseUrl);
+        $src = parse_url($source);
+
+        $baseHost = strtolower((string) ($base['host'] ?? ''));
+        $srcHost = strtolower((string) ($src['host'] ?? ''));
+        $basePath = rtrim((string) ($base['path'] ?? ''), '/');
+        $srcPath = (string) ($src['path'] ?? '');
+
+        if ($baseHost !== '' && $srcHost !== '' && $baseHost === $srcHost) {
+            return strpos($srcPath, $basePath . '/uploads/') === 0;
+        }
+
+        // Support relative forms like /email-insights/uploads/file.jpg or uploads/file.jpg.
+        if (strpos($source, '/uploads/') !== false) {
+            return true;
+        }
+
+        return strpos($source, 'uploads/') === 0;
     }
 
     public static function decodeUrl(string $safeBase64): string

@@ -330,7 +330,7 @@ render_page:
                 <input type="text" name="subject" value="<?php echo htmlspecialchars((string) ($_POST['subject'] ?? ''), ENT_QUOTES, 'UTF-8'); ?>" placeholder="Optional but recommended" />
 
                 <label>Email Composer</label>
-                <textarea id="html-source" name="html_content" placeholder="Paste full HTML email..." required><?php echo htmlspecialchars((string) ($_POST['html_content'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                <textarea id="html-source" name="html_content" placeholder="Paste full HTML email..."><?php echo htmlspecialchars((string) ($_POST['html_content'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
                 <p class="small">Use Insert > Image to upload directly from your computer. Any links, including image links, will be auto-rewritten to click tracking URLs.</p>
 
                 <button type="submit">Process Email</button>
@@ -360,6 +360,7 @@ render_page:
 <script>
     (function () {
         const source = document.getElementById('html-source');
+        const form = document.querySelector('form');
         const sendModeInputs = Array.from(document.querySelectorAll('input[name="send_mode"]'));
         const scheduleFields = document.getElementById('schedule-fields');
 
@@ -375,6 +376,11 @@ render_page:
             images_upload_url: '<?php echo htmlspecialchars(portal_url($config, '/upload-image.php'), ENT_QUOTES, 'UTF-8'); ?>',
             convert_urls: false,
             content_style: 'body { font-family: Arial, Helvetica, sans-serif; font-size:14px }',
+            setup: function (editor) {
+                editor.on('change input undo redo', function () {
+                    editor.save();
+                });
+            },
         });
 
         function updateScheduleVisibility() {
@@ -384,6 +390,19 @@ render_page:
         }
 
         sendModeInputs.forEach((input) => input.addEventListener('change', updateScheduleVisibility));
+
+        if (form) {
+            form.addEventListener('submit', function (event) {
+                if (window.tinymce) {
+                    window.tinymce.triggerSave();
+                }
+
+                if (!source.value || source.value.trim() === '') {
+                    event.preventDefault();
+                    window.alert('Please add email content before processing.');
+                }
+            });
+        }
 
         updateScheduleVisibility();
     })();
